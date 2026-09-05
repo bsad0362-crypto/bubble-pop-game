@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="ur">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Bubble Pop - 45 Levels</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; user-select:none; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#1a1035; font-family:'Segoe UI', Tahoma, sans-serif; touch-action:none; }
+
+  /* ---------- Level Select Screen ---------- */
+  #levelSelect { position:fixed; inset:0; background:linear-gradient(180deg,#2b1b5c 0%,#1a1035 100%); z-index:30; overflow-y:auto; padding:20px 16px 40px; }
+  #levelSelect.hidden { display:none; }
+  #lsHeader { text-align:center; margin-bottom:18px; padding-top:10px; }
+  #lsHeader h1 { color:#f4d35e; font-size:28px; letter-spacing:1px; }
+  #lsHeader p { color:#b8a8e0; font-size:13px; margin-top:4px; }
+  #levelGrid { display:grid; grid-template-columns:repeat(5,1fr); gap:10px; max-width:460px; margin:0 auto; }
+  .lvlBtn { aspect-ratio:1/1; border-radius:14px; display:flex; flex-direction:column; align-items:center; justify-content:center; font-weight:800; font-size:18px; border:none; position:relative; }
+  .lvlBtn.locked { background:#241a44; color:#5c4d8a; }
+  .lvlBtn.unlocked { background:#3d2a80; color:#f2f2f2; box-shadow:0 4px 12px rgba(61,42,128,.5); }
+  .lvlBtn.done { background:#f4d35e; color:#1a1035; }
+  .lvlBtn .stars { font-size:9px; margin-top:2px; letter-spacing:1px; }
+  .lvlBtn:active { transform:scale(.94); }
+
+  /* ---------- Game Screen ---------- */
+  #gameScreen { position:fixed; inset:0; display:none; flex-direction:column; }
+  #gameScreen.active { display:flex; }
+  #topBar { display:flex; align-items:center; justify-content:space-between; padding:14px 16px 8px; }
+  #backBtn { background:rgba(255,255,255,.1); color:#f2f2f2; border:none; width:38px; height:38px; border-radius:10px; font-size:18px; }
+  #levelLabel { color:#f4d35e; font-weight:800; font-size:16px; }
+  .movesBox { background:rgba(255,255,255,.1); border-radius:10px; padding:6px 14px; color:#f2f2f2; font-size:13px; font-weight:700; }
+
+  #gameCanvas { flex:1; width:100%; touch-action:none; }
+
+  #bottomBar { display:flex; align-items:center; justify-content:center; padding:10px 16px 26px; }
+  #targetInfo { color:#b8a8e0; font-size:12px; text-align:center; }
+
+  /* ---------- Overlay (win/lose) ---------- */
+  #resultOverlay { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; background:rgba(15,10,30,.94); z-index:40; text-align:center; padding:24px; }
+  #resultOverlay.hidden { display:none; }
+  #resultOverlay h1 { font-size:30px; margin-bottom:8px; }
+  #resultOverlay h1.win { color:#8ef58e; }
+  #resultOverlay h1.lose { color:#e63946; }
+  #resultOverlay p { color:#cfd8dc; font-size:15px; margin-bottom:22px; }
+  .btnRow { display:flex; gap:12px; }
+  .actionBtn { background:#f4d35e; color:#1a1035; border:none; padding:13px 26px; border-radius:26px; font-size:15px; font-weight:700; }
+  .actionBtn.secondary { background:rgba(255,255,255,.12); color:#f2f2f2; }
+  .actionBtn:active { transform:scale(.96); }
+</style>
+</head>
+<body>
+
+<!-- LEVEL SELECT -->
+<div id="levelSelect">
+  <div id="lsHeader">
+    <h1>BUBBLE POP</h1>
+    <p>Level chunein — 45 levels available</p>
+  </div>
+  <div id="levelGrid"></div>
+</div>
+
+<!-- GAME SCREEN -->
+<div id="gameScreen">
+  <div id="topBar">
+    <button id="backBtn">←</button>
+    <div id="levelLabel">Level 1</div>
+    <div id="movesDisplay" class="movesBox">Moves: 15</div>
+  </div>
+  <canvas id="gameCanvas"></canvas>
+  <div id="bottomBar">
+    <div id="targetInfo">Sab bubbles saaf karo</div>
+  </div>
+</div>
+
+<!-- RESULT OVERLAY -->
+<div id="resultOverlay" class="hidden">
+  <h1 id="resultTitle">LEVEL CLEAR!</h1>
+  <p id="resultText">Great job!</p>
+  <div class="btnRow">
+    <button class="actionBtn secondary" id="retryBtn">Dobara</button>
+    <button class="actionBtn" id="nextBtn">Aage Badho</button>
+  </div>
+</div>
+
+<script>
+// ================= CONFIG =================
+const TOTAL_LEVELS = 45;
+const COLORS = ['#e63946','#f4a300','#f4d35e','#8ef58e','#4cc9f0','#b967ff'];
+const ROWS_VISIBLE = 8;
+const COLS = 8;
+
+// ================= PROGRESS STORAGE =================
+function getProgress() {
+  const raw = localStorage.getItem('bubblePopProgress');
+  if (raw) return JSON.parse(raw);
+  return { unlocked: 1, stars: {} };
+}
+function saveProgress(p) {
+  localStorage.setItem('bubblePopProgress', JSON.stringify(p));
+}
+let progress = getProgress();
+
+// ================= LEVEL CONFIG GENERATION =================
+function levelConfig(n) {
+  // difficulty scales with level number
+  const colorCount = Math.min(3 + Math.floor(n / 8), COLORS.length);
+  const rows = Math.min(4 + Math.floor(n / 6), 10);
+  const moves = Math.max(14, 26 - Math.floor(n / 3));
+  return { colorCount, rows, moves };
+}
+
+// ================= LEVEL SELECT UI =================
+const levelGrid = document.getElementById('levelGrid');
+function renderLevelSelect() {
+  levelGrid.innerHTML = '';
+  for (let i = 1; i <= TOTAL_LEVELS; i++) {
+    const btn = document.createElement('button');
+    const isDone = !!progress.stars[i];
+    const isUnlocked = i <= progress.unlocked;
+    btn.className = 'lvlBtn ' + (isDone ? 'done' : isUnlocked ? 'unlocked' : 'locked');
+    btn.innerHTML = isUnlocked ? i : '🔒';
+    if (isDone) {
+      const s = document.createElement('div');
+      s.className = 'stars';
+      s.textContent = '★'.repeat(progress.stars[i]);
+      btn.appendChild(s);
+    }
+    if (isUnlocked) {
+      btn.addEventListener('click', () => startLevel(i));
+    }
+    levelGrid.appendChild(btn);
+  }
+}
+renderLevelSelect();
+
+// ================= GAME STATE =================
+const levelSelectEl = document.getElementById('levelSelect');
+const gameScreenEl = document.getElementById('gameScreen');
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const levelLabelEl = document.getElementById('levelLabel');
+const movesDisplayEl = document.getElementById('movesDisplay');
+const resultOverlay = document.getElementById('resultOverlay');
+const resultTitle = document.getElementById('resultTitle');
+const resultText = document.getElementById('resultText');
+
+let currentLevel = 1;
+let cfg;
+let grid = []; // grid[row][col] = colorIndex or -1
+let cellSize, offsetX, offsetY;
+let movesLeft;
+let shooter = { x:0, y:0, angle: -Math.PI/2 };
+let currentBall, nextBall;
+let flyingBall = null;
+let particles = [];
+let gameActive = false;
+let W, H;
+
+function resizeCanvas() {
+  W = canvas.clientWidth = canvas.parentElement.clientWidth;
+  H = canvas.clientHeight = canvas.parentElement.clientHeight;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  cellSize = W / COLS;
+  offsetX = 0;
+  offsetY = 20;
+  shooter.x = W/2;
+  shooter.y = H - 70;
+}
+window.addEventListener('resize', () => { if (gameActive) { resizeCanvas(); } });
+
+function buildGrid() {
+  grid = [];
+  for (let r = 0; r < cfg.rows; r++) {
+    const row = [];
+    for (let c = 0; c < COLS; c++) {
+      row.push(Math.floor(Math.random() * cfg.colorCount));
+    }
+    grid.push(row);
+  }
+}
+
+function hexRowOffset(r) {
+  return (r % 2 === 1) ? cellSize/2 : 0;
+}
+
+function cellCenter(r, c) {
+  const x = offsetX + c*cellSize + cellSize/2 + hexRowOffset(r);
+  const y = offsetY + r*cellSize*0.87 + cellSize/2;
+  return {x, y};
+}
+
+function randomColor() {
+  return Math.floor(Math.random() * cfg.colorCount);
+}
+
+function startLevel(n) {
+  currentLevel = n;
+  cfg = levelConfig(n);
+  movesLeft = cfg.moves;
+  levelSelectEl.classList.add('hidden');
+  gameScreenEl.classList.add('active');
+  levelLabelEl.textContent = 'Level ' + n;
+  movesDisplayEl.textContent = 'Moves: ' + movesLeft;
+  resultOverlay.classList.add('hidden');
+  resizeCanvas();
+  buildGrid();
+  currentBall = randomColor();
+  nextBall = randomColor();
+  flyingBall = null;
+  particles = [];
+  gameActive = true;
+  requestAnimationFrame(loop);
+}
+
+document.getElementById('backBtn').addEventListener('click', () => {
+  gameActive = false;
+  gameScreenEl.classList.remove('active');
+  levelSelectEl.classList.remove('hidden');
+  renderLevelSelect();
+});
+
+// ================= INPUT (aim & shoot) =================
+function aimAt(px, py) {
+  const dx = px - shooter.x;
+  const dy = py - shooter.y;
+  let angle = Math.atan2(dy, dx);
+  // clamp angle to upward hemisphere
+  const minA = -Math.PI + 0.15, maxA = -0.15;
+  if (angle > 0) angle = angle - Math.PI*2; // normalize
+  if (angle < minA) angle = minA;
+  if (angle > maxA) angle = maxA;
+  shooter.angle = angle;
+}
+
+function shoot() {
+  if (flyingBall || !gameActive) return;
+  const speed = 12;
+  flyingBall = {
+    x: shooter.x, y: shooter.y,
+    vx: Math.cos(shooter.angle)*speed,
+    vy: Math.sin(shooter.angle)*speed,
+    color: currentBall
+  };
+}
+
+canvas.addEventListener('pointermove', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  aimAt(e.clientX-rect.left, e.clientY-rect.top);
+});
+canvas.addEventListener('pointerdown', (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const px = e.clientX-rect.left, py = e.clientY-rect.top;
+
+  // check if tap is on the shooter ball or next-ball preview -> swap colors
+  const shooterRadius = cellSize*0.42;
+  const distShooter = Math.hypot(px-shooter.x, py-shooter.y);
+  const distNext = Math.hypot(px-(shooter.x+46), py-(shooter.y+4));
+  if (!flyingBall && gameActive && (distShooter < shooterRadius*1.3 || distNext < shooterRadius*0.9)) {
+    const tmp = currentBall;
+    currentBall = nextBall;
+    nextBall = tmp;
+    return;
+  }
+
+  aimAt(px, py);
+  shoot();
+});
+
+// ================= GAME LOGIC =================
+function neighbors(r, c) {
+  const isOdd = r % 2 === 1;
+  const deltas = isOdd
+    ? [[-1,0],[-1,1],[0,-1],[0,1],[1,0],[1,1]]
+    : [[-1,-1],[-1,0],[0,-1],[0,1],[1,-1],[1,0]];
+  return deltas.map(([dr,dc]) => [r+dr, c+dc])
+    .filter(([nr,nc]) => nr>=0 && nr<grid.length && nc>=0 && nc<COLS);
+}
+
+function findMatchGroup(r, c) {
+  const color = grid[r][c];
+  if (color === -1 || color === undefined) return [];
+  const visited = new Set();
+  const stack = [[r,c]];
+  const group = [];
+  while (stack.length) {
+    const [cr,cc] = stack.pop();
+    const key = cr+','+cc;
+    if (visited.has(key)) continue;
+    visited.add(key);
+    if (grid[cr] === undefined || grid[cr][cc] !== color) continue;
+    group.push([cr,cc]);
+    neighbors(cr,cc).forEach(([nr,nc]) => {
+      if (!visited.has(nr+','+nc)) stack.push([nr,nc]);
+    });
+  }
+  return group;
+}
+
+function removeFloating() {
+  // find all connected to top row, remove rest
+  const rows = grid.length;
+  const connected = new Set();
+  const stack = [];
+  for (let c=0;c<COLS;c++) {
+    if (grid[0][c] !== -1 && grid[0][c] !== undefined) { stack.push([0,c]); }
+  }
+  while (stack.length) {
+    const [r,c] = stack.pop();
+    const key = r+','+c;
+    if (connected.has(key)) continue;
+    connected.add(key);
+    neighbors(r,c).forEach(([nr,nc]) => {
+      if (grid[nr] && grid[nr][nc] !== -1 && grid[nr][nc] !== undefined && !connected.has(nr+','+nc)) {
+        stack.push([nr,nc]);
+      }
+    });
+  }
+  let dropped = 0;
+  for (let r=0;r<rows;r++) {
+    for (let c=0;c<COLS;c++) {
+      if (grid[r][c] !== -1 && grid[r][c] !== undefined && !connected.has(r+','+c)) {
+        spawnParticles(r,c,grid[r][c]);
+        grid[r][c] = -1;
+        dropped++;
+      }
+    }
+  }
+  return dropped;
+}
+
+function spawnParticles(r,c,color) {
+  const {x,y} = cellCenter(r,c);
+  for (let i=0;i<6;i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random()-0.5)*6,
+      vy: (Math.random()-0.5)*6,
+      color: COLORS[color],
+      life: 20
+    });
+  }
+}
+
+function checkLevelState() {
+  let remaining = 0;
+  for (let r=0;r<grid.length;r++) for (let c=0;c<COLS;c++) if (grid[r][c] !== -1 && grid[r][c] !== undefined) remaining++;
+
+  if (remaining === 0) {
+    // WIN
+    gameActive = false;
+    const stars = movesLeft > cfg.moves*0.5 ? 3 : movesLeft > cfg.moves*0.2 ? 2 : 1;
+    progress.stars[currentLevel] = Math.max(progress.stars[currentLevel]||0, stars);
+    if (currentLevel === progress.unlocked && currentLevel < TOTAL_LEVELS) {
+      progress.unlocked = currentLevel + 1;
+    }
+    saveProgress(progress);
+    resultTitle.textContent = 'LEVEL CLEAR!';
+    resultTitle.className = 'win';
+    resultText.textContent = 'Stars: ' + '★'.repeat(stars) + ' • Moves bache: ' + movesLeft;
+    document.getElementById('nextBtn').style.display = currentLevel < TOTAL_LEVELS ? 'inline-block' : 'none';
+    resultOverlay.classList.remove('hidden');
+    return;
+  }
+
+  // check if a row has reached the shooter line -> lose
+  const dangerRow = Math.floor((H - 140 - offsetY) / (cellSize*0.87));
+  for (let c=0;c<COLS;c++) {
+    if (grid[dangerRow] && grid[dangerRow][c] !== -1 && grid[dangerRow][c] !== undefined) {
+      loseLevel();
+      return;
+    }
+  }
+
+  if (movesLeft <= 0) {
+    loseLevel();
+  }
+}
+
+function loseLevel() {
+  gameActive = false;
+  resultTitle.textContent = 'LEVEL FAIL';
+  resultTitle.className = 'lose';
+  resultText.textContent = 'Moves khatam ho gaye. Dobara try karein!';
+  document.getElementById('nextBtn').style.display = 'none';
+  resultOverlay.classList.remove('hidden');
+}
+
+document.getElementById('retryBtn').addEventListener('click', () => startLevel(currentLevel));
+document.getElementById('nextBtn').addEventListener('click', () => startLevel(currentLevel+1));
+
+function settleBall(fb) {
+  // find nearest grid cell
+  let bestR=0, bestC=0, bestDist=Infinity;
+  const maxRow = grid.length + 2;
+  for (let r=0;r<maxRow;r++) {
+    if (!grid[r]) grid[r] = Array(COLS).fill(-1);
+    for (let c=0;c<COLS;c++) {
+      const {x,y} = cellCenter(r,c);
+      const d = (x-fb.x)**2 + (y-fb.y)**2;
+      if (d < bestDist && (grid[r][c] === -1 || grid[r][c] === undefined)) {
+        bestDist = d; bestR = r; bestC = c;
+      }
+    }
+  }
+  if (!grid[bestR]) grid[bestR] = Array(COLS).fill(-1);
+  grid[bestR][bestC] = fb.color;
+
+  const group = findMatchGroup(bestR, bestC);
+  if (group.length >= 3) {
+    group.forEach(([r,c]) => { spawnParticles(r,c,grid[r][c]); grid[r][c] = -1; });
+    removeFloating();
+  }
+
+  movesLeft--;
+  movesDisplayEl.textContent = 'Moves: ' + movesLeft;
+  currentBall = nextBall;
+  nextBall = randomColor();
+  checkLevelState();
+}
+
+// ================= RENDER LOOP =================
+function drawBubble(x, y, r, colorIdx) {
+  const grad = ctx.createRadialGradient(x-r*0.3,y-r*0.3,r*0.1,x,y,r);
+  grad.addColorStop(0, '#ffffff');
+  grad.addColorStop(0.25, COLORS[colorIdx]);
+  grad.addColorStop(1, COLORS[colorIdx]);
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(x,y,r,0,Math.PI*2);
+  ctx.fill();
+}
+
+function loop() {
+  if (!gameActive && !flyingBall) {
+    // still allow final render frame then stop
+  }
+  ctx.clearRect(0,0,W,H);
+
+  // draw grid bubbles
+  const radius = cellSize*0.42;
+  for (let r=0;r<grid.length;r++) {
+    for (let c=0;c<COLS;c++) {
+      if (grid[r][c] !== -1 && grid[r][c] !== undefined) {
+        const {x,y} = cellCenter(r,c);
+        drawBubble(x,y,radius,grid[r][c]);
+      }
+    }
+  }
+
+  // particles
+  for (let i=particles.length-1;i>=0;i--) {
+    const p = particles[i];
+    p.x += p.vx; p.y += p.vy; p.life--;
+    ctx.globalAlpha = Math.max(0,p.life/20);
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x,p.y,4,0,Math.PI*2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    if (p.life<=0) particles.splice(i,1);
+  }
+
+  // flying ball physics
+  if (flyingBall) {
+    flyingBall.x += flyingBall.vx;
+    flyingBall.y += flyingBall.vy;
+    if (flyingBall.x < radius || flyingBall.x > W-radius) {
+      flyingBall.vx *= -1;
+      flyingBall.x = Math.max(radius, Math.min(W-radius, flyingBall.x));
+    }
+    if (flyingBall.y < offsetY + radius) {
+      settleBall(flyingBall);
+      flyingBall = null;
+    } else {
+      // check collision with existing bubbles
+      let collided = false;
+      for (let r=0;r<grid.length && !collided;r++) {
+        for (let c=0;c<COLS;c++) {
+          if (grid[r][c] !== -1 && grid[r][c] !== undefined) {
+            const {x,y} = cellCenter(r,c);
+            const dist = Math.hypot(x-flyingBall.x, y-flyingBall.y);
+            if (dist < radius*1.9) { collided = true; break; }
+          }
+        }
+      }
+      if (collided) {
+        settleBall(flyingBall);
+        flyingBall = null;
+      } else {
+        drawBubble(flyingBall.x, flyingBall.y, radius, flyingBall.color);
+      }
+    }
+  }
+
+  // shooter + aim line
+  if (gameActive) {
+    ctx.strokeStyle = 'rgba(255,255,255,.25)';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6,8]);
+    ctx.beginPath();
+    ctx.moveTo(shooter.x, shooter.y);
+    ctx.lineTo(shooter.x + Math.cos(shooter.angle)*300, shooter.y + Math.sin(shooter.angle)*300);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    drawBubble(shooter.x, shooter.y, radius, currentBall);
+    // next ball preview
+    drawBubble(shooter.x + 46, shooter.y + 4, radius*0.6, nextBall);
+    ctx.fillStyle = 'rgba(255,255,255,.5)';
+    ctx.font = '10px sans-serif';
+    ctx.fillText('AGLA', shooter.x + 32, shooter.y - 20);
+    ctx.fillStyle = 'rgba(255,255,255,.35)';
+    ctx.font = '9px sans-serif';
+    ctx.fillText('Tap = badlein', shooter.x - radius, shooter.y + radius + 16);
+  }
+
+  if (gameActive || flyingBall || particles.length) {
+    requestAnimationFrame(loop);
+  }
+}
+</script>
+</body>
+</html>
